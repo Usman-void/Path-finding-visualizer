@@ -163,7 +163,7 @@ int main()
         {
             grid.clearTerrain();
         }
-        else if (choice == 5 || choice == 6)
+        else if (choice >= 5 && choice <= 8)
         {
             SearchResult result;
 
@@ -172,10 +172,20 @@ int main()
                 cout << "\nRunning BFS..." << endl;
                 result = BFS(grid);
             }
-            else
+            else if (choice == 6)
             {
                 cout << "\nRunning DFS..." << endl;
                 result = DFS(grid);
+            }
+            else if (choice == 7)
+            {
+                cout << "\nRunning Dijkstra..." << endl;
+                result = Dijkstra(grid);
+            }
+            else if (choice == 8)
+            {
+                cout << "\nRunning A*..." << endl;
+                result = AStar(grid);
             }
 
             grid.display(result.path, result.pathSize);
@@ -185,6 +195,7 @@ int main()
             {
                 cout << "Path Found!" << endl;
                 cout << "Path Length (steps): " << result.pathLength << endl;
+                cout << "Path Cost (terrain): " << result.pathCost << endl;
             }
             else
             {
@@ -192,10 +203,6 @@ int main()
             }
 
             cout << "Visited Nodes: " << result.visitedCount << endl;
-        }
-        else if (choice == 7 || choice == 8)
-        {
-            cout << "Weighted algorithms not connected yet." << endl;
         }
         else if (choice != 12)
         {
