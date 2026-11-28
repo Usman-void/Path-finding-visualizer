@@ -1,0 +1,1223 @@
+#include <QApplication>
+#include <QWidget>
+#include <QPainter>
+#include <QMouseEvent>
+#include <QKeyEvent>
+#include <QTimer>
+#include <QElapsedTimer>
+#include <QPushButton>
+#include <QLabel>
+#include <QSpinBox>
+#include <QHBoxLayout>
+#include <QVBoxLayout>
+#include <QFont>
+#include <QStyle>
+#include <functional>
+#include <cstdlib>
+#include <ctime>
+
+const int ROWS = 10;
+const int COLS = 10;
+const int SIZE = ROWS * COLS;
+const int MAX_BUFFER = SIZE * 4;
+const int INF = 999999;
+const int MIN_COST = 1;
+const int MAX_COST = 9;
+
+class Node
+{
+public:
+    int row;
+    int col;
+    bool isWall;
+    bool isVisited;
+    int distance;
+    int cost;
+    int parentRow;
+    int parentCol;
+
+    Node()
+    {
+        row = 0;
+        col = 0;
+        isWall = false;
+        isVisited = false;
+        distance = INF;
+        cost = MIN_COST;
+        parentRow = -1;
+        parentCol = -1;
+    }
+};
+
+class Grid
+{
+public:
+    Node nodes[ROWS][COLS];
+    int startRow;
+    int startCol;
+    int endRow;
+    int endCol;
+    int visitOrder[SIZE];
+    int visitOrderCount;
+
+    Grid()
+    {
+        startRow = 0;
+        startCol = 0;
+        endRow = ROWS - 1;
+        endCol = COLS - 1;
+        visitOrderCount = 0;
+
+        for (int i = 0; i < ROWS; i++)
+        {
+            for (int j = 0; j < COLS; j++)
+            {
+                nodes[i][j].row = i;
+                nodes[i][j].col = j;
+            }
+        }
+    }
+
+    bool isValid(int row, int col) const
+    {
+        return row >= 0 && row < ROWS && col >= 0 && col < COLS;
+    }
+
+    bool isStart(int row, int col) const
+    {
+        return row == startRow && col == startCol;
+    }
+
+    bool isEnd(int row, int col) const
+    {
+        return row == endRow && col == endCol;
+    }
+
+    bool setStart(int row, int col)
+    {
+        if (!isValid(row, col) || isEnd(row, col) || nodes[row][col].isWall)
+            return false;
+        startRow = row;
+        startCol = col;
+        resetSearch();
+        return true;
+    }
+
+    bool setEnd(int row, int col)
+    {
+        if (!isValid(row, col) || isStart(row, col) || nodes[row][col].isWall)
+            return false;
+        endRow = row;
+        endCol = col;
+        resetSearch();
+        return true;
+    }
+
+    bool addWall(int row, int col)
+    {
+        if (!isValid(row, col) || isStart(row, col) || isEnd(row, col))
+            return false;
+        nodes[row][col].isWall = true;
+        nodes[row][col].cost = MIN_COST;
+        return true;
+    }
+
+    bool removeWall(int row, int col)
+    {
+        if (!isValid(row, col))
+            return false;
+        nodes[row][col].isWall = false;
+        return true;
+    }
+
+    void clearWalls()
+    {
+        for (int i = 0; i < ROWS; i++)
+            for (int j = 0; j < COLS; j++)
+                nodes[i][j].isWall = false;
+        resetSearch();
+    }
+
+    bool setCost(int row, int col, int cost)
+    {
+        if (!isValid(row, col) || nodes[row][col].isWall)
+            return false;
+        if (cost < MIN_COST || cost > MAX_COST)
+            return false;
+        nodes[row][col].cost = cost;
+        return true;
+    }
+
+    void clearTerrain()
+    {
+        for (int i = 0; i < ROWS; i++)
+            for (int j = 0; j < COLS; j++)
+                nodes[i][j].cost = MIN_COST;
+        resetSearch();
+    }
+
+    void resetSearch()
+    {
+        for (int i = 0; i < ROWS; i++)
+        {
+            for (int j = 0; j < COLS; j++)
+            {
+                nodes[i][j].isVisited = false;
+                nodes[i][j].distance = INF;
+                nodes[i][j].parentRow = -1;
+                nodes[i][j].parentCol = -1;
+            }
+        }
+        visitOrderCount = 0;
+    }
+
+    void markVisited(int row, int col)
+    {
+        nodes[row][col].isVisited = true;
+        if (visitOrderCount < SIZE)
+        {
+            visitOrder[visitOrderCount] = row * COLS + col;
+            visitOrderCount++;
+        }
+    }
+};
+
+class Queue
+{
+private:
+    int arr[SIZE];
+    int front;
+    int rear;
+
+public:
+    Queue()
+    {
+        front = 0;
+        rear = -1;
+    }
+
+    bool isEmpty() const
+    {
+        return front > rear;
+    }
+
+    void enqueue(int value)
+    {
+        if (rear < SIZE - 1)
+        {
+            rear++;
+            arr[rear] = value;
+        }
+    }
+
+    int dequeue()
+    {
+        if (!isEmpty())
+        {
+            int value = arr[front];
+            front++;
+            return value;
+        }
+        return -1;
+    }
+};
+
+class Stack
+{
+private:
+    int arr[MAX_BUFFER];
+    int top;
+
+public:
+    Stack()
+    {
+        top = -1;
+    }
+
+    bool isEmpty() const
+    {
+        return top == -1;
+    }
+
+    void push(int value)
+    {
+        if (top < MAX_BUFFER - 1)
+        {
+            top++;
+            arr[top] = value;
+        }
+    }
+
+    int pop()
+    {
+        if (!isEmpty())
+        {
+            int value = arr[top];
+            top--;
+            return value;
+        }
+        return -1;
+    }
+};
+
+class PriorityQueue
+{
+private:
+    int heap[MAX_BUFFER];
+    int priority[MAX_BUFFER];
+    int size;
+
+    void swapValues(int i, int j)
+    {
+        int temp = heap[i];
+        heap[i] = heap[j];
+        heap[j] = temp;
+
+        temp = priority[i];
+        priority[i] = priority[j];
+        priority[j] = temp;
+    }
+
+    void heapifyUp(int index)
+    {
+        while (index > 0)
+        {
+            int parent = (index - 1) / 2;
+            if (priority[index] < priority[parent])
+            {
+                swapValues(index, parent);
+                index = parent;
+            }
+            else
+            {
+                break;
+            }
+        }
+    }
+
+    void heapifyDown(int index)
+    {
+        while (true)
+        {
+            int left = 2 * index + 1;
+            int right = 2 * index + 2;
+            int smallest = index;
+
+            if (left < size && priority[left] < priority[smallest])
+                smallest = left;
+            if (right < size && priority[right] < priority[smallest])
+                smallest = right;
+
+            if (smallest != index)
+            {
+                swapValues(index, smallest);
+                index = smallest;
+            }
+            else
+            {
+                break;
+            }
+        }
+    }
+
+public:
+    PriorityQueue()
+    {
+        size = 0;
+    }
+
+    bool isEmpty() const
+    {
+        return size == 0;
+    }
+
+    void enqueue(int value, int cost)
+    {
+        if (size < MAX_BUFFER)
+        {
+            heap[size] = value;
+            priority[size] = cost;
+            heapifyUp(size);
+            size++;
+        }
+    }
+
+    int dequeue()
+    {
+        if (isEmpty())
+            return -1;
+
+        int value = heap[0];
+        size--;
+
+        if (size > 0)
+        {
+            heap[0] = heap[size];
+            priority[0] = priority[size];
+            heapifyDown(0);
+        }
+        return value;
+    }
+
+    int getPriority() const
+    {
+        if (!isEmpty())
+            return priority[0];
+        return INF;
+    }
+};
+
+class SearchResult
+{
+public:
+    bool found;
+    int visitedCount;
+    int pathLength;
+    int pathCost;
+    int path[SIZE];
+    int pathSize;
+    int visitOrder[SIZE];
+    int visitOrderCount;
+
+    SearchResult()
+    {
+        found = false;
+        visitedCount = 0;
+        pathLength = 0;
+        pathCost = 0;
+        pathSize = 0;
+        visitOrderCount = 0;
+    }
+};
+
+const int dr[4] = {-1, 1, 0, 0};
+const int dc[4] = {0, 0, -1, 1};
+
+int absoluteValue(int number)
+{
+    return (number < 0) ? -number : number;
+}
+
+bool validNeighbor(const Grid &grid, int row, int col)
+{
+    return grid.isValid(row, col) && !grid.nodes[row][col].isWall;
+}
+
+void prepareGrid(Grid &grid)
+{
+    grid.resetSearch();
+    grid.nodes[grid.startRow][grid.startCol].distance = 0;
+}
+
+SearchResult getResult(const Grid &grid, bool found)
+{
+    SearchResult result;
+    result.found = found;
+    result.visitedCount = grid.visitOrderCount;
+    result.visitOrderCount = grid.visitOrderCount;
+
+    for (int i = 0; i < grid.visitOrderCount; i++)
+        result.visitOrder[i] = grid.visitOrder[i];
+
+    if (found)
+    {
+        int row = grid.endRow;
+        int col = grid.endCol;
+
+        while (row != -1 && col != -1 && result.pathSize < SIZE)
+        {
+            result.path[result.pathSize] = row * COLS + col;
+            result.pathSize++;
+
+            int newRow = grid.nodes[row][col].parentRow;
+            int newCol = grid.nodes[row][col].parentCol;
+            row = newRow;
+            col = newCol;
+        }
+
+        for (int i = 0; i < result.pathSize / 2; i++)
+        {
+            int temp = result.path[i];
+            result.path[i] = result.path[result.pathSize - 1 - i];
+            result.path[result.pathSize - 1 - i] = temp;
+        }
+
+        result.pathLength = result.pathSize - 1;
+
+        for (int i = 1; i < result.pathSize; i++)
+        {
+            int r = result.path[i] / COLS;
+            int c = result.path[i] % COLS;
+            result.pathCost += grid.nodes[r][c].cost;
+        }
+    }
+
+    return result;
+}
+
+SearchResult BFS(Grid &grid)
+{
+    prepareGrid(grid);
+
+    Queue q;
+    q.enqueue(grid.startRow * COLS + grid.startCol);
+    bool found = false;
+
+    while (!q.isEmpty())
+    {
+        int current = q.dequeue();
+        int row = current / COLS;
+        int col = current % COLS;
+
+        if (grid.nodes[row][col].isVisited)
+            continue;
+
+        grid.markVisited(row, col);
+
+        if (grid.isEnd(row, col))
+        {
+            found = true;
+            break;
+        }
+
+        for (int i = 0; i < 4; i++)
+        {
+            int newRow = row + dr[i];
+            int newCol = col + dc[i];
+
+            if (validNeighbor(grid, newRow, newCol) &&
+                grid.nodes[newRow][newCol].distance == INF)
+            {
+                grid.nodes[newRow][newCol].distance = grid.nodes[row][col].distance + 1;
+                grid.nodes[newRow][newCol].parentRow = row;
+                grid.nodes[newRow][newCol].parentCol = col;
+                q.enqueue(newRow * COLS + newCol);
+            }
+        }
+    }
+
+    return getResult(grid, found);
+}
+
+SearchResult DFS(Grid &grid)
+{
+    prepareGrid(grid);
+
+    Stack s;
+    s.push(grid.startRow * COLS + grid.startCol);
+    bool found = false;
+
+    while (!s.isEmpty())
+    {
+        int current = s.pop();
+        int row = current / COLS;
+        int col = current % COLS;
+
+        if (grid.nodes[row][col].isVisited)
+            continue;
+
+        grid.markVisited(row, col);
+
+        if (grid.isEnd(row, col))
+        {
+            found = true;
+            break;
+        }
+
+        for (int i = 0; i < 4; i++)
+        {
+            int newRow = row + dr[i];
+            int newCol = col + dc[i];
+
+            if (validNeighbor(grid, newRow, newCol) &&
+                !grid.nodes[newRow][newCol].isVisited)
+            {
+                grid.nodes[newRow][newCol].distance = grid.nodes[row][col].distance + 1;
+                grid.nodes[newRow][newCol].parentRow = row;
+                grid.nodes[newRow][newCol].parentCol = col;
+                s.push(newRow * COLS + newCol);
+            }
+        }
+    }
+
+    return getResult(grid, found);
+}
+
+SearchResult Dijkstra(Grid &grid)
+{
+    prepareGrid(grid);
+
+    PriorityQueue pq;
+    pq.enqueue(grid.startRow * COLS + grid.startCol, 0);
+    bool found = false;
+
+    while (!pq.isEmpty())
+    {
+        int currentDistance = pq.getPriority();
+        int current = pq.dequeue();
+        int row = current / COLS;
+        int col = current % COLS;
+
+        if (currentDistance != grid.nodes[row][col].distance)
+            continue;
+        if (grid.nodes[row][col].isVisited)
+            continue;
+
+        grid.markVisited(row, col);
+
+        if (grid.isEnd(row, col))
+        {
+            found = true;
+            break;
+        }
+
+        for (int i = 0; i < 4; i++)
+        {
+            int newRow = row + dr[i];
+            int newCol = col + dc[i];
+
+            if (validNeighbor(grid, newRow, newCol))
+            {
+                int newDistance = currentDistance + grid.nodes[newRow][newCol].cost;
+
+                if (newDistance < grid.nodes[newRow][newCol].distance)
+                {
+                    grid.nodes[newRow][newCol].distance = newDistance;
+                    grid.nodes[newRow][newCol].parentRow = row;
+                    grid.nodes[newRow][newCol].parentCol = col;
+                    pq.enqueue(newRow * COLS + newCol, newDistance);
+                }
+            }
+        }
+    }
+
+    return getResult(grid, found);
+}
+
+SearchResult AStar(Grid &grid)
+{
+    prepareGrid(grid);
+
+    PriorityQueue pq;
+    int initialH = (absoluteValue(grid.endRow - grid.startRow) +
+                    absoluteValue(grid.endCol - grid.startCol)) * MIN_COST;
+    pq.enqueue(grid.startRow * COLS + grid.startCol, initialH);
+    bool found = false;
+
+    while (!pq.isEmpty())
+    {
+        int currentF = pq.getPriority();
+        int current = pq.dequeue();
+        int row = current / COLS;
+        int col = current % COLS;
+
+        int heuristic = (absoluteValue(grid.endRow - row) +
+                         absoluteValue(grid.endCol - col)) * MIN_COST;
+        int expectedF = grid.nodes[row][col].distance + heuristic;
+
+        if (currentF != expectedF)
+            continue;
+        if (grid.nodes[row][col].isVisited)
+            continue;
+
+        grid.markVisited(row, col);
+
+        if (grid.isEnd(row, col))
+        {
+            found = true;
+            break;
+        }
+
+        for (int i = 0; i < 4; i++)
+        {
+            int newRow = row + dr[i];
+            int newCol = col + dc[i];
+
+            if (validNeighbor(grid, newRow, newCol))
+            {
+                int newDistance = grid.nodes[row][col].distance + grid.nodes[newRow][newCol].cost;
+
+                if (newDistance < grid.nodes[newRow][newCol].distance)
+                {
+                    grid.nodes[newRow][newCol].distance = newDistance;
+                    grid.nodes[newRow][newCol].parentRow = row;
+                    grid.nodes[newRow][newCol].parentCol = col;
+
+                    int newH = (absoluteValue(grid.endRow - newRow) +
+                                absoluteValue(grid.endCol - newCol)) * MIN_COST;
+                    pq.enqueue(newRow * COLS + newCol, newDistance + newH);
+                }
+            }
+        }
+    }
+
+    return getResult(grid, found);
+}
+
+const int CELL = 46;
+const int GRID_W = COLS * CELL;
+const int GRID_H = ROWS * CELL;
+
+const QColor COL_BG      (24, 26, 33);
+const QColor COL_EMPTY   (236, 239, 244);
+const QColor COL_WALL    (45, 52, 70);
+const QColor COL_VISITED (120, 180, 245);
+const QColor COL_FRONT   (255, 160, 60);
+const QColor COL_PATH    (255, 220, 60);
+const QColor COL_START   (60, 190, 100);
+const QColor COL_END     (230, 70, 70);
+
+const int SPEEDS[] = {5, 15, 30, 60, 150, 500};
+const int SPEED_COUNT = 6;
+const float PATH_SPEED = 25.0f;
+
+enum Mode { IDLE, VISITING, PATHING, DONE };
+enum Drag { DRAG_NONE, DRAG_START, DRAG_END, DRAG_DRAW, DRAG_ERASE, DRAG_TERRAIN };
+
+const char *ALGO_NAMES[] = {"BFS", "DFS", "Dijkstra", "A*"};
+
+class GridCanvas : public QWidget
+{
+public:
+    Grid grid;
+    SearchResult result;
+    int visitedAt[ROWS][COLS];
+    int pathAt[ROWS][COLS];
+    Mode mode = IDLE;
+    Drag drag = DRAG_NONE;
+    float visitShown = 0.0f;
+    float pathShown = 0.0f;
+    bool paused = false;
+    int speedIdx = 2;
+    int algoIdx = -1;
+    bool terrainBrushActive = false;
+    int brushCost = 5;
+
+    std::function<void()> onStateChanged;
+
+    GridCanvas(QWidget *parent = nullptr) : QWidget(parent)
+    {
+        setFixedSize(GRID_W, GRID_H);
+        setMouseTracking(true);
+        clearSearch();
+    }
+
+    void clearSearch()
+    {
+        grid.resetSearch();
+        result = SearchResult();
+        for (int i = 0; i < ROWS; i++)
+        {
+            for (int j = 0; j < COLS; j++)
+            {
+                visitedAt[i][j] = -1;
+                pathAt[i][j] = -1;
+            }
+        }
+        mode = IDLE;
+        visitShown = 0.0f;
+        pathShown = 0.0f;
+        algoIdx = -1;
+        update();
+        if (onStateChanged) onStateChanged();
+    }
+
+    void runAlgorithm(int which)
+    {
+        clearSearch();
+
+        if (which == 0) result = BFS(grid);
+        else if (which == 1) result = DFS(grid);
+        else if (which == 2) result = Dijkstra(grid);
+        else result = AStar(grid);
+
+        for (int i = 0; i < result.visitOrderCount; i++)
+        {
+            int idx = result.visitOrder[i];
+            visitedAt[idx / COLS][idx % COLS] = i;
+        }
+        for (int i = 0; i < result.pathSize; i++)
+        {
+            int idx = result.path[i];
+            pathAt[idx / COLS][idx % COLS] = i;
+        }
+
+        algoIdx = which;
+        mode = VISITING;
+        paused = false;
+        update();
+        if (onStateChanged) onStateChanged();
+    }
+
+    void randomWalls()
+    {
+        grid.clearWalls();
+        clearSearch();
+        for (int i = 0; i < ROWS; i++)
+            for (int j = 0; j < COLS; j++)
+                if (rand() % 100 < 25)
+                    grid.addWall(i, j);
+        update();
+    }
+
+    void randomTerrain()
+    {
+        grid.clearTerrain();
+        clearSearch();
+        for (int i = 0; i < ROWS; i++)
+            for (int j = 0; j < COLS; j++)
+                if (!grid.nodes[i][j].isWall && !grid.isStart(i, j) && !grid.isEnd(i, j) && rand() % 100 < 35)
+                    grid.setCost(i, j, 2 + rand() % (MAX_COST - 1));
+        update();
+    }
+
+    void clearWalls()
+    {
+        grid.clearWalls();
+        clearSearch();
+    }
+
+    void clearTerrain()
+    {
+        grid.clearTerrain();
+        clearSearch();
+    }
+
+    void updateAnimation(float dt)
+    {
+        if (paused) return;
+
+        if (mode == VISITING)
+        {
+            visitShown += SPEEDS[speedIdx] * dt;
+            if (visitShown >= result.visitOrderCount)
+            {
+                visitShown = (float)result.visitOrderCount;
+                pathShown = 0.0f;
+                mode = result.found ? PATHING : DONE;
+            }
+            update();
+            if (onStateChanged) onStateChanged();
+        }
+        else if (mode == PATHING)
+        {
+            pathShown += PATH_SPEED * dt;
+            if (pathShown >= result.pathSize)
+            {
+                pathShown = (float)result.pathSize;
+                mode = DONE;
+            }
+            update();
+            if (onStateChanged) onStateChanged();
+        }
+    }
+
+protected:
+    void paintEvent(QPaintEvent *) override
+    {
+        QPainter painter(this);
+        painter.fillRect(rect(), COL_BG);
+
+        int vs = (int)visitShown;
+        int ps = (int)pathShown;
+
+        QFont mainFont("Segoe UI", 12, QFont::Bold);
+        QFont costFont("Segoe UI", 11, QFont::Bold);
+
+        for (int i = 0; i < ROWS; i++)
+        {
+            for (int j = 0; j < COLS; j++)
+            {
+                int x = j * CELL;
+                int y = i * CELL;
+                int cellCost = grid.nodes[i][j].cost;
+                QColor color = COL_EMPTY;
+
+                if (grid.nodes[i][j].isWall)
+                {
+                    color = COL_WALL;
+                }
+                else if (pathAt[i][j] >= 0 && pathAt[i][j] < ps)
+                {
+                    color = COL_PATH;
+                }
+                else if (visitedAt[i][j] >= 0 && visitedAt[i][j] < vs)
+                {
+                    color = (mode == VISITING && visitedAt[i][j] >= vs - 2) ? COL_FRONT : COL_VISITED;
+                }
+                else if (cellCost > MIN_COST)
+                {
+                    int shade = 235 - (cellCost - 1) * 16;
+                    color = QColor(235, shade, shade - 35);
+                }
+
+                if (grid.isStart(i, j))
+                    color = COL_START;
+                else if (grid.isEnd(i, j))
+                    color = COL_END;
+
+                QRect cellRect(x + 1, y + 1, CELL - 2, CELL - 2);
+                painter.fillRect(cellRect, color);
+
+                if (grid.isStart(i, j) || grid.isEnd(i, j))
+                {
+                    painter.setFont(mainFont);
+                    painter.setPen(Qt::white);
+                    painter.drawText(cellRect, Qt::AlignCenter, grid.isStart(i, j) ? "S" : "E");
+                }
+                else if (!grid.nodes[i][j].isWall && cellCost > MIN_COST)
+                {
+                    painter.setFont(costFont);
+                    painter.setPen(QColor(40, 44, 55));
+                    painter.drawText(cellRect, Qt::AlignCenter, QString::number(cellCost));
+                }
+            }
+        }
+    }
+
+    void mousePressEvent(QMouseEvent *event) override
+    {
+        int c = event->pos().x() / CELL;
+        int r = event->pos().y() / CELL;
+        if (r < 0 || r >= ROWS || c < 0 || c >= COLS) return;
+
+        bool left = (event->button() == Qt::LeftButton);
+        bool right = (event->button() == Qt::RightButton);
+
+        if (left || right)
+        {
+            if (left && grid.isStart(r, c))
+                drag = DRAG_START;
+            else if (left && grid.isEnd(r, c))
+                drag = DRAG_END;
+            else if (right)
+                drag = DRAG_ERASE;
+            else if (terrainBrushActive)
+                drag = DRAG_TERRAIN;
+            else if (grid.nodes[r][c].isWall)
+                drag = DRAG_ERASE;
+            else
+                drag = DRAG_DRAW;
+
+            if (mode != IDLE)
+                clearSearch();
+
+            applyDrag(r, c);
+        }
+    }
+
+    void mouseMoveEvent(QMouseEvent *event) override
+    {
+        if (drag == DRAG_NONE) return;
+        int c = event->pos().x() / CELL;
+        int r = event->pos().y() / CELL;
+        if (r >= 0 && r < ROWS && c >= 0 && c < COLS)
+            applyDrag(r, c);
+    }
+
+    void mouseReleaseEvent(QMouseEvent *) override
+    {
+        drag = DRAG_NONE;
+    }
+
+private:
+    void applyDrag(int r, int c)
+    {
+        if (drag == DRAG_START)
+        {
+            grid.setStart(r, c);
+        }
+        else if (drag == DRAG_END)
+        {
+            grid.setEnd(r, c);
+        }
+        else if (drag == DRAG_DRAW)
+        {
+            grid.addWall(r, c);
+        }
+        else if (drag == DRAG_ERASE)
+        {
+            grid.removeWall(r, c);
+            grid.setCost(r, c, MIN_COST);
+        }
+        else if (drag == DRAG_TERRAIN)
+        {
+            if (!grid.isStart(r, c) && !grid.isEnd(r, c))
+            {
+                grid.removeWall(r, c);
+                grid.setCost(r, c, brushCost);
+            }
+        }
+        update();
+    }
+};
+
+class VisualizerWindow : public QWidget
+{
+private:
+    GridCanvas *canvas;
+    QPushButton *algoBtns[4];
+    QPushButton *pauseBtn;
+    QPushButton *brushBtn;
+    QSpinBox *costSpin;
+    QLabel *speedLabel;
+    QLabel *statusLabel;
+    QTimer *timer;
+    QElapsedTimer elapsed;
+
+public:
+    VisualizerWindow()
+    {
+        setWindowTitle("Pathfinding Visualizer");
+        setFocusPolicy(Qt::StrongFocus);
+
+        setStyleSheet(R"(
+            QWidget {
+                background-color: #242732;
+                color: #ebeef5;
+                font-family: "Segoe UI", sans-serif;
+            }
+            QPushButton {
+                background-color: #464e69;
+                border: none;
+                border-radius: 4px;
+                padding: 6px 10px;
+                font-size: 12px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #5f698c;
+            }
+            QPushButton[active="true"] {
+                background-color: #3c8cdc;
+            }
+            QSpinBox {
+                background-color: #363b4e;
+                border: 1px solid #5f698c;
+                border-radius: 4px;
+                padding: 3px 6px;
+                font-size: 12px;
+                font-weight: bold;
+            }
+        )");
+
+        QVBoxLayout *mainLayout = new QVBoxLayout(this);
+        mainLayout->setContentsMargins(0, 0, 0, 0);
+        mainLayout->setSpacing(0);
+
+        QWidget *topPanel = new QWidget();
+        QVBoxLayout *panelLayout = new QVBoxLayout(topPanel);
+        panelLayout->setContentsMargins(12, 10, 12, 8);
+        panelLayout->setSpacing(8);
+
+        QHBoxLayout *row1 = new QHBoxLayout();
+        const char *labels[] = {"BFS (B)", "DFS (D)", "Dijkstra (J)", "A* (A)"};
+        for (int i = 0; i < 4; i++)
+        {
+            algoBtns[i] = new QPushButton(labels[i]);
+            algoBtns[i]->setFocusPolicy(Qt::NoFocus);
+            connect(algoBtns[i], &QPushButton::clicked, [this, i]() {
+                canvas->runAlgorithm(i);
+            });
+            row1->addWidget(algoBtns[i]);
+        }
+
+        speedLabel = new QLabel();
+        speedLabel->setStyleSheet("font-size: 13px; font-weight: bold; margin-left: 10px;");
+        row1->addWidget(speedLabel);
+        row1->addStretch();
+        panelLayout->addLayout(row1);
+
+        QHBoxLayout *row2 = new QHBoxLayout();
+        QPushButton *clearPathBtn = new QPushButton("Clear Path (R)");
+        QPushButton *clearWallsBtn = new QPushButton("Clear Walls (C)");
+        QPushButton *randWallsBtn = new QPushButton("Rand Walls (M)");
+        pauseBtn = new QPushButton("Pause (Space)");
+        QPushButton *slowerBtn = new QPushButton("Slower");
+        QPushButton *fasterBtn = new QPushButton("Faster");
+
+        QPushButton *toolBtns[] = {clearPathBtn, clearWallsBtn, randWallsBtn, pauseBtn, slowerBtn, fasterBtn};
+        for (QPushButton *b : toolBtns)
+        {
+            b->setFocusPolicy(Qt::NoFocus);
+            row2->addWidget(b);
+        }
+        panelLayout->addLayout(row2);
+
+        QHBoxLayout *row3 = new QHBoxLayout();
+        brushBtn = new QPushButton("Brush: Wall (T)");
+        brushBtn->setFocusPolicy(Qt::NoFocus);
+
+        QLabel *costText = new QLabel("Terrain Cost:");
+        costText->setStyleSheet("font-size: 12px; font-weight: bold;");
+
+        costSpin = new QSpinBox();
+        costSpin->setRange(MIN_COST, MAX_COST);
+        costSpin->setValue(5);
+        costSpin->setFocusPolicy(Qt::NoFocus);
+
+        QPushButton *randTerrainBtn = new QPushButton("Rand Terrain (N)");
+        QPushButton *clearTerrainBtn = new QPushButton("Clear Terrain (X)");
+        randTerrainBtn->setFocusPolicy(Qt::NoFocus);
+        clearTerrainBtn->setFocusPolicy(Qt::NoFocus);
+
+        row3->addWidget(brushBtn);
+        row3->addWidget(costText);
+        row3->addWidget(costSpin);
+        row3->addWidget(randTerrainBtn);
+        row3->addWidget(clearTerrainBtn);
+        row3->addStretch();
+        panelLayout->addLayout(row3);
+
+        connect(clearPathBtn, &QPushButton::clicked, [this]() { canvas->clearSearch(); });
+        connect(clearWallsBtn, &QPushButton::clicked, [this]() { canvas->clearWalls(); });
+        connect(randWallsBtn, &QPushButton::clicked, [this]() { canvas->randomWalls(); });
+        connect(pauseBtn, &QPushButton::clicked, [this]() { togglePause(); });
+        connect(slowerBtn, &QPushButton::clicked, [this]() { changeSpeed(-1); });
+        connect(fasterBtn, &QPushButton::clicked, [this]() { changeSpeed(1); });
+        connect(brushBtn, &QPushButton::clicked, [this]() { toggleBrush(); });
+        connect(costSpin, QOverload<int>::of(&QSpinBox::valueChanged), [this](int val) {
+            canvas->brushCost = val;
+        });
+        connect(randTerrainBtn, &QPushButton::clicked, [this]() { canvas->randomTerrain(); });
+        connect(clearTerrainBtn, &QPushButton::clicked, [this]() { canvas->clearTerrain(); });
+
+        QLabel *hintLabel = new QLabel("Left drag: paint wall/terrain   Right drag: erase   Drag S/E: move start/end");
+        hintLabel->setStyleSheet("color: #a0a8be; font-size: 11px;");
+        panelLayout->addWidget(hintLabel);
+
+        mainLayout->addWidget(topPanel);
+
+        canvas = new GridCanvas();
+        canvas->onStateChanged = [this]() { refreshUI(); };
+        mainLayout->addWidget(canvas, 0, Qt::AlignCenter);
+
+        statusLabel = new QLabel();
+        statusLabel->setStyleSheet("background-color: #242732; padding: 10px 12px; font-size: 13px; font-weight: bold;");
+        mainLayout->addWidget(statusLabel);
+
+        setFixedSize(sizeHint());
+
+        elapsed.start();
+        timer = new QTimer(this);
+        connect(timer, &QTimer::timeout, [this]() {
+            float dt = elapsed.restart() / 1000.0f;
+            canvas->updateAnimation(dt);
+        });
+        timer->start(16);
+
+        refreshUI();
+    }
+
+protected:
+    void keyPressEvent(QKeyEvent *event) override
+    {
+        switch (event->key())
+        {
+        case Qt::Key_B:     canvas->runAlgorithm(0); break;
+        case Qt::Key_D:     canvas->runAlgorithm(1); break;
+        case Qt::Key_J:     canvas->runAlgorithm(2); break;
+        case Qt::Key_A:     canvas->runAlgorithm(3); break;
+        case Qt::Key_R:     canvas->clearSearch(); break;
+        case Qt::Key_C:     canvas->clearWalls(); break;
+        case Qt::Key_M:     canvas->randomWalls(); break;
+        case Qt::Key_N:     canvas->randomTerrain(); break;
+        case Qt::Key_X:     canvas->clearTerrain(); break;
+        case Qt::Key_T:     toggleBrush(); break;
+        case Qt::Key_Space: togglePause(); break;
+        case Qt::Key_Up:    changeSpeed(1); break;
+        case Qt::Key_Down:  changeSpeed(-1); break;
+        default:            QWidget::keyPressEvent(event);
+        }
+    }
+
+private:
+    void togglePause()
+    {
+        canvas->paused = !canvas->paused;
+        refreshUI();
+    }
+
+    void toggleBrush()
+    {
+        canvas->terrainBrushActive = !canvas->terrainBrushActive;
+        refreshUI();
+    }
+
+    void changeSpeed(int delta)
+    {
+        int next = canvas->speedIdx + delta;
+        if (next >= 0 && next < SPEED_COUNT)
+        {
+            canvas->speedIdx = next;
+            refreshUI();
+        }
+    }
+
+    void refreshUI()
+    {
+        for (int i = 0; i < 4; i++)
+        {
+            bool isActive = (canvas->algoIdx == i);
+            algoBtns[i]->setProperty("active", isActive);
+            algoBtns[i]->style()->unpolish(algoBtns[i]);
+            algoBtns[i]->style()->polish(algoBtns[i]);
+        }
+
+        pauseBtn->setText(canvas->paused ? "Resume (Space)" : "Pause (Space)");
+        pauseBtn->setProperty("active", canvas->paused);
+        pauseBtn->style()->unpolish(pauseBtn);
+        pauseBtn->style()->polish(pauseBtn);
+
+        brushBtn->setText(canvas->terrainBrushActive ? "Brush: Terrain (T)" : "Brush: Wall (T)");
+        brushBtn->setProperty("active", canvas->terrainBrushActive);
+        brushBtn->style()->unpolish(brushBtn);
+        brushBtn->style()->polish(brushBtn);
+
+        speedLabel->setText(QString("Speed: %1 nodes/s").arg(SPEEDS[canvas->speedIdx]));
+
+        int visited = (int)canvas->visitShown;
+        if (visited > canvas->result.visitOrderCount)
+            visited = canvas->result.visitOrderCount;
+
+        if (canvas->mode == IDLE)
+        {
+            statusLabel->setText("Ready. Paint walls or terrain, then pick an algorithm.");
+        }
+        else if (canvas->mode == VISITING)
+        {
+            statusLabel->setText(QString("Running %1...   Visited: %2")
+                                     .arg(ALGO_NAMES[canvas->algoIdx]).arg(visited));
+        }
+        else if (canvas->mode == PATHING)
+        {
+            statusLabel->setText(QString("%1: drawing path...   Visited: %2")
+                                     .arg(ALGO_NAMES[canvas->algoIdx]).arg(visited));
+        }
+        else if (canvas->result.found)
+        {
+            statusLabel->setText(QString("%1: Found!   Steps: %2   Terrain Cost: %3   Visited: %4")
+                                     .arg(ALGO_NAMES[canvas->algoIdx])
+                                     .arg(canvas->result.pathLength)
+                                     .arg(canvas->result.pathCost)
+                                     .arg(canvas->result.visitedCount));
+        }
+        else
+        {
+            statusLabel->setText(QString("%1: No path found!   Visited: %2")
+                                     .arg(ALGO_NAMES[canvas->algoIdx])
+                                     .arg(canvas->result.visitedCount));
+        }
+    }
+};
+
+int main(int argc, char *argv[])
+{
+    srand((unsigned)time(nullptr));
+
+    QApplication app(argc, argv);
+    VisualizerWindow window;
+    window.show();
+
+    return app.exec();
+}
